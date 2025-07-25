@@ -1,0 +1,65 @@
+
+
+def compute_post_price(row):
+    if row["direction"] == "sell":
+        return (row["pool_quote"] - row["amt_out"]) / (row["pool_base"] + row["amt_in"])
+    else:  # direction == "buy"
+        return (row["amt_in"] + row["pool_quote"]) / (row["pool_base"] - row["amt_out"])
+
+
+
+file_name = os.path.splitext(os.path.basename(file_path))[0]
+        feed_df = pd.read_csv(file_path)
+        feed_df['price'] = float('nan')
+        feed_df['price_impact'] = float('nan')
+        feed_df["trade_triggered"] = ""        # empty string for no trigger
+        feed_df["trade_executed"] = ""         # empty string for no execution
+        feed_df["trade_size"] = float('nan')   # NaN for no trade size
+        feed_df["trade_price"] = float('nan')  # NaN for no trade price
+        feed_df["position"] = float('nan')     # NaN for no position change
+
+        feed_df["price"] = feed_df.apply(compute_post_price, axis=1)
+        #### Build a complete slot index so empty slots can be forward-filled later
+        all_slots = range(int(feed_df["slot"].min()), int(feed_df["slot"].max()) + 1)
+
+        # Take the LAST price in each slot → the slot’s close price
+        slot_close = (
+            feed_df.groupby("slot")["price"]
+                .last()               # last swap in that slot
+                .reindex(all_slots)   # include slots with no swaps
+                .ffill()              # forward-fill empty slots
+        )
+        FAST, SLOW = 1200, 2600
+        ema_fast = slot_close.ewm(span=FAST, adjust=False).mean()
+        ema_slow = slot_close.ewm(span=SLOW, adjust=False).mean()
+        macd      = ema_fast - ema_slow
+        macd_next_slot = macd.shift(1)
+        slot2ts = pd.to_datetime(
+            feed_df.groupby("slot")["ts"].first().reindex(all_slots).ffill().astype(int),
+            unit="s", utc=True
+        )
+        macd_ts = slot2ts.reindex(macd_next_slot.index)  # ensure same length/order
+        macd_x = macd_ts.values          # datetime64[ns] values
+        macd_y = macd_next_slot.values   # MACD values already shifted
+
+        #### attach to each swap row (slot→MACD) for use in buy-logic
+        feed_df["macd"] = feed_df["slot"].map(macd_next_slot)
+
+
+        price_x = []
+        price_y = []
+        for ts_val, vals in sorted(price_by_ts.items()):
+            t_dt = pd.to_datetime(ts_val, unit='s')
+            price_x += [t_dt, t_dt, None]
+            price_y += [vals["low"], vals["high"], None]
+        
+        # Add price range trace (high-low bar) and strategy orders on subplot 1
+        fig.add_trace(go.Scatter(x=price_x, y=price_y, mode='lines', name='Price Range', line=dict(color='black')), row=1, col=1)
+        fig.add_trace(go.Scatter(x=[pd.to_datetime(t, unit='s') for t in strat_buy_times], y=strat_buy_prices,
+                                 mode='markers', name='Buy Orders', marker=dict(color='green')), row=1, col=1)
+        fig.add_trace(go.Scatter(x=[pd.to_datetime(t, unit='s') for t in strat_sell_times], y=strat_sell_prices,
+                                 mode='markers', name='Sell Orders', marker=dict(color='red'),
+                                 text=strat_sell_reasons, hoverinfo='text'), row=1, col=1)
+        fig.add_trace(go.Scatter(x=macd_x, y=macd_y, showlegend=True, mode="lines", line=dict(color="cyan"), 
+                                 name="Macd Line"), row=1, col=1, secondary_y=True)
+        # Add PnL trace on subplot 
