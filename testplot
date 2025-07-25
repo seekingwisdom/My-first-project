@@ -45,13 +45,28 @@ file_name = os.path.splitext(os.path.basename(file_path))[0]
         #### attach to each swap row (slot→MACD) for use in buy-logic
         feed_df["macd"] = feed_df["slot"].map(macd_next_slot)
 
-
+ # Prepare price high-low data by second
+        price_data = []
+        for _, tx in feed_df.iterrows():
+            if tx["direction"] == "sell":
+                price_after = ((tx["pool_quote"] - tx["amt_out"]) / (tx["pool_base"] + tx["amt_in"])) if tx["pool_base"] and tx["pool_quote"] else (tx["amt_out"] / tx["amt_in"] if tx["amt_in"] != 0 else 0.0)
+            else:
+                price_after = ((tx["amt_in"] + tx["pool_quote"]) / (tx["pool_base"] - tx["amt_out"])) if (tx["pool_base"] - tx["amt_out"]) != 0 else float('inf')
+            price_data.append((tx["ts"], price_after))
+        price_by_ts = {}
+        for ts_val, price_val in price_data:
+            if ts_val not in price_by_ts:
+                price_by_ts[ts_val] = {"low": price_val, "high": price_val}
+            else:
+                price_by_ts[ts_val]["low"] = min(price_by_ts[ts_val]["low"], price_val)
+                price_by_ts[ts_val]["high"] = max(price_by_ts[ts_val]["high"], price_val)
         price_x = []
         price_y = []
         for ts_val, vals in sorted(price_by_ts.items()):
             t_dt = pd.to_datetime(ts_val, unit='s')
             price_x += [t_dt, t_dt, None]
             price_y += [vals["low"], vals["high"], None]
+        
         
         # Add price range trace (high-low bar) and strategy orders on subplot 1
         fig.add_trace(go.Scatter(x=price_x, y=price_y, mode='lines', name='Price Range', line=dict(color='black')), row=1, col=1)
